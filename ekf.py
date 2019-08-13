@@ -40,7 +40,7 @@ class ekf():
 	self.input_sub = rospy.Subscriber('/uav/input/rateThrust', RateThrust, self.input_callback)
 
 	self.p=self.q=self.r=0
-	self.ax=self.ay=self.az=0
+	self.prev_ax=self.prev_ay=self.prev_az=0
 	self.imu_check=0
 
 	self.euler_integrated_yaw=0
@@ -63,16 +63,16 @@ class ekf():
 	self.p=anv.x
 	self.q=anv.y
 	self.r=anv.z
-	self.ax=lina.x
-	self.ay=lina.y
-	self.az=lina.z
 	if self.imu_check==1 and self.input_check==1:
 		p=self.p
 		q=self.q
 		r=self.r
-		ax=self.ax
-		ay=self.ay
-		az=self.az
+		ax=FirstOrderLPF(self.prev_ax, lina.x, 200, 1/960);
+		ay=FirstOrderLPF(self.prev_ay, lina.y, 200, 1/960);
+		az=FirstOrderLPF(self.prev_az, lina.z, 200, 1/960);
+		self.prev_ax=ax
+		self.prev_ay=ay
+		self.prev_az=az
 		''' Filtering '''
 		self.t_roll,self.t_pitch=accelerometer_arctan_estimator(ax,ay,az)
 
@@ -116,8 +116,8 @@ def LKF_estimator(z,rates,dt,P,x):
 	z=np.array([qw,qx,qy,qz]).reshape((4,1))
 
 	H=np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
-	Q=np.array([[0.05,0,0,0],[0,0.05,0,0],[0,0,0.05,0],[0,0,0,0.05]])
-	R=np.array([[10,0,0,0],[0,10,0,0],[0,0,10,0],[0,0,0,10]])
+	Q=np.array([[0.005,0,0,0],[0,0.005,0,0],[0,0,0.005,0],[0,0,0,0.005]])
+	R=np.array([[1000,0,0,0],[0,1000,0,0],[0,0,1000,0],[0,0,0,1000]])
 	
 	A=np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]) + \
 	dt*0.5*np.array([[0,-p,-q,-r],[p,0,r,-q],[q,-r,0,p],[r,q,-p,0]])
@@ -140,8 +140,8 @@ def EKF_estimator(z,rates,dt,P,x):
 	z=z.reshape((3,1))
 
 	H=np.array([[1,0,0],[0,1,0],[0,0,0]])
-	Q=np.array([[0.05,0,0],[0,0.05,0],[0,0,0.05]])
-	R=np.array([[10,0,0],[0,10,0],[0,0,10]])
+	Q=np.array([[0.005,0,0],[0,0.005,0],[0,0,0.005]])
+	R=np.array([[1000,0,0],[0,1000,0],[0,0,1000]])
 
 	A=np.array([[1,0,0],[0,1,0],[0,0,1]]) + \
 	dt * np.array([[q*cos(roll)*tan(pitch)-r*sin(roll)*tan(pitch), (q*sin(roll)+r*cos(roll))*pow(sec(pitch),2), 0], \
@@ -177,6 +177,11 @@ def CF_estimator():
 def sec(x):
 	return 1/cos(x)
 
+
+def FirstOrderLPF(PtrPrevOutput, CurInput, CutOffFreq_hz, SamplingTime_sec):
+    LPFGain = SamplingTime_sec/((1/(2*np.pi*CutOffFreq_hz))+SamplingTime_sec)
+    LPFOutput = (1-LPFGain)*(PtrPrevOutput) + LPFGain*CurInput
+    return LPFOutput
 
 def graphupdate(i):
 	global t
