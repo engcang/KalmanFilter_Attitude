@@ -79,7 +79,7 @@ class ekf():
 		self._x,self._P=LKF_estimator([self.t_roll,self.t_pitch,self.euler_integrated_yaw],[p,q,r],self.dt,self._P,self._x)
 		self._xe=euler_from_quaternion([self._x[0][0],self._x[1][0],self._x[2][0],self._x[3][0]])
 
-		self.x,self.P=EKF_estimator(np.array([ax,ay,az]),[p,q,r],self.dt,self.P,self.x)
+		self.x,self.P=EKF_estimator(np.array([self.t_roll,self.t_pitch,self.euler_integrated_yaw]),[p,q,r],self.dt,self.P,self.x)
 
     def tf_callback(self,msg):
 	idx=len(msg.transforms)-1
@@ -94,7 +94,8 @@ class ekf():
 
 	r=msg.angular_rates.z
 	self.dt=(self.curr_t-self.prev_t)
-	self.euler_integrated_yaw=self.euler_integrated_yaw + r*self.dt
+	# self.euler_integrated_yaw=self.euler_integrated_yaw + r*self.dt
+	self.euler_integrated_yaw=self.euler_integrated_yaw + r*0.0333
 
 	if self.euler_integrated_yaw>np.pi:
 		self.euler_integrated_yaw=self.euler_integrated_yaw-2*np.pi
@@ -106,6 +107,8 @@ class ekf():
 def accelerometer_arctan_estimator(ax,ay,az):
 	roll=atan2(ay,az)
 	pitch=atan2(ax,sqrt(pow(ay,2)+pow(az,2)))
+	# roll=atan2(-ay,sqrt(pow(ax,2)+pow(az,2)))
+	# pitch=atan2(-ax,az)
 	return roll,pitch
 
 def LKF_estimator(z,rates,dt,P,x):
@@ -117,7 +120,7 @@ def LKF_estimator(z,rates,dt,P,x):
 
 	H=np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
 	Q=np.array([[0.005,0,0,0],[0,0.005,0,0],[0,0,0.005,0],[0,0,0,0.005]])
-	R=np.array([[1000,0,0,0],[0,1000,0,0],[0,0,1000,0],[0,0,0,1000]])
+	R=np.array([[3000,0,0,0],[0,3000,0,0],[0,0,3000,0],[0,0,0,3000]])
 	
 	A=np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]) + \
 	dt*0.5*np.array([[0,-p,-q,-r],[p,0,r,-q],[q,-r,0,p],[r,q,-p,0]])
@@ -140,15 +143,15 @@ def EKF_estimator(z,rates,dt,P,x):
 	z=z.reshape((3,1))
 
 	H=np.array([[1,0,0],[0,1,0],[0,0,0]])
-	Q=np.array([[0.005,0,0],[0,0.005,0],[0,0,0.005]])
-	R=np.array([[1000,0,0],[0,1000,0],[0,0,1000]])
+	Q=np.array([[0.001,0,0],[0,0.001,0],[0,0,0.001]]) #Process noise
+	R=np.array([[3000,0,0],[0,3000,0],[0,0,3000]]) #Sensor noise
 
 	A=np.array([[1,0,0],[0,1,0],[0,0,1]]) + \
 	dt * np.array([[q*cos(roll)*tan(pitch)-r*sin(roll)*tan(pitch), (q*sin(roll)+r*cos(roll))*pow(sec(pitch),2), 0], \
 	[-q*sin(roll)-r*cos(roll), 0, 0], \
 	[(q*cos(roll)-r*sin(roll))*sec(pitch), (q*sin(roll)+r*cos(roll))*sec(pitch)*tan(pitch), 0]])
 
-	x_=np.array([[p+(q*sin(roll)+r*cos(roll))*tan(pitch)], [q*cos(roll)-r*sin(roll)], [(q*sin(roll)+r*cos(roll))*sec(pitch)]])
+	x_=x + dt*np.array([[p+(q*sin(roll)+r*cos(roll))*tan(pitch)], [q*cos(roll)-r*sin(roll)], [(q*sin(roll)+r*cos(roll))*sec(pitch)]])
 	x_=x_.reshape((3,1))
 	P_=np.dot(np.dot(A,P),A.transpose()) + Q
 
@@ -156,7 +159,7 @@ def EKF_estimator(z,rates,dt,P,x):
 
 	P =P_ - np.dot(np.dot(K,H),P_)
 	if abs(np.amax(P))>1e+06:
-		P=np.array([[10,0,0],[0,10,0],[0,0,10]])
+		P=np.array([[100,0,0],[0,100,0],[0,0,100]])
 		x=x
 		return x,P
 	x =x_ + np.dot(K,(z-np.dot(H,x_)))
@@ -185,7 +188,8 @@ def FirstOrderLPF(PtrPrevOutput, CurInput, CutOffFreq_hz, SamplingTime_sec):
 
 def graphupdate(i):
 	global t
-	t=t+ekf.dt
+	# t=t+ekf.dt
+	t=t+0.0333
 	x_time.append(t)
 	x_time.popleft()
 	roll_fig.set_xlim(np.amin(x_time),np.amax(x_time))
