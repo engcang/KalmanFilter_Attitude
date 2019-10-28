@@ -31,78 +31,89 @@ global d2r
 d2r=np.pi/180
 global r2d
 r2d=180/np.pi
+global tg
+global prev_tg
+tg=0
+prev_tg=0
 
 class ekf():
     def __init__(self):
-        rospy.init_node('estimator', anonymous=True)
-        self.imu_sub = rospy.Subscriber('/uav/sensors/imu', Imu, self.imu_callback)
-	self.tf_sub = rospy.Subscriber('/tf', TFMessage, self.tf_callback)
-	self.input_sub = rospy.Subscriber('/uav/input/rateThrust', RateThrust, self.input_callback)
+		rospy.init_node('estimator', anonymous=True)
+		self.imu_sub = rospy.Subscriber('/uav/sensors/imu', Imu, self.imu_callback)
+		self.tf_sub = rospy.Subscriber('/tf', TFMessage, self.tf_callback)
+		self.input_sub = rospy.Subscriber('/uav/input/rateThrust', RateThrust, self.input_callback)
 
-	self.p=self.q=self.r=0
-	self.prev_ax=self.prev_ay=self.prev_az=0
-	self.imu_check=0
+		self.p=self.q=self.r=0
+		self.prev_ax=self.prev_ay=self.prev_az=0
+		self.imu_check=0
 
-	self.euler_integrated_yaw=0
-	self.prev_t=self.curr_t=0
-	self.input_check=0
+		self.euler_integrated_yaw=0
+		self.prev_t=self.curr_t=self.prev_ti=self.curr_ti=0
+		self.dt=self.dti=self.dtg=0
+		self.input_check=0
 
-	''' For KF '''
+		''' For KF '''
 
-	self.P=np.array([[10,0,0],[0,10,0],[0,0,10]])
-	self.x=np.array([0,0,0]).reshape((3,1)) #EKF
-	self._P=np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
-	self._x=np.array([1,0,0,0]).reshape((4,1)) #LKF
+		self.P=np.array([[10,0,0],[0,10,0],[0,0,10]])
+		self.x=np.array([0,0,0]).reshape((3,1)) #EKF
+		self._P=np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
+		self._x=np.array([1,0,0,0]).reshape((4,1)) #LKF
 
 
     def imu_callback(self,msg):
-	self.imu_check=1
-	anv=msg.angular_velocity
-	lina=msg.linear_acceleration
+		self.imu_check=1
+		anv=msg.angular_velocity
+		lina=msg.linear_acceleration
+		if self.prev_ti==0:
+			self.prev_ti=time.time()
+			return
+		self.dti=time.time()-self.prev_ti
+		self.prev_ti=time.time()
 
-	self.p=anv.x
-	self.q=anv.y
-	self.r=anv.z
-	if self.imu_check==1 and self.input_check==1:
-		p=self.p
-		q=self.q
-		r=self.r
-		ax=FirstOrderLPF(self.prev_ax, lina.x, 200, 1/960);
-		ay=FirstOrderLPF(self.prev_ay, lina.y, 200, 1/960);
-		az=FirstOrderLPF(self.prev_az, lina.z, 200, 1/960);
-		self.prev_ax=ax
-		self.prev_ay=ay
-		self.prev_az=az
-		''' Filtering '''
-		self.t_roll,self.t_pitch=accelerometer_arctan_estimator(ax,ay,az)
 
-		self._x,self._P=LKF_estimator([self.t_roll,self.t_pitch,self.euler_integrated_yaw],[p,q,r],self.dt,self._P,self._x)
-		self._xe=euler_from_quaternion([self._x[0][0],self._x[1][0],self._x[2][0],self._x[3][0]])
+		self.p=anv.x
+		self.q=anv.y
+		self.r=anv.z
+		if self.imu_check==1 and self.input_check==1:
+			p=self.p
+			q=self.q
+			r=self.r
+			ax=FirstOrderLPF(self.prev_ax, lina.x, 200, 1/960);
+			ay=FirstOrderLPF(self.prev_ay, lina.y, 200, 1/960);
+			az=FirstOrderLPF(self.prev_az, lina.z, 200, 1/960);
+			self.prev_ax=ax
+			self.prev_ay=ay
+			self.prev_az=az
+			''' Filtering '''
+			self.t_roll,self.t_pitch=accelerometer_arctan_estimator(ax,ay,az)
 
-		self.x,self.P=EKF_estimator(np.array([self.t_roll,self.t_pitch,self.euler_integrated_yaw]),[p,q,r],self.dt,self.P,self.x)
+			self._x,self._P=LKF_estimator([self.t_roll,self.t_pitch,self.euler_integrated_yaw],[p,q,r],self.dti,self._P,self._x)
+			self._xe=euler_from_quaternion([self._x[0][0],self._x[1][0],self._x[2][0],self._x[3][0]])
+
+			self.x,self.P=EKF_estimator(np.array([self.t_roll,self.t_pitch,self.euler_integrated_yaw]),[p,q,r],self.dti,self.P,self.x)
 
     def tf_callback(self,msg):
-	idx=len(msg.transforms)-1
-	if msg.transforms[idx].child_frame_id=="uav/imu":
-	    self.truth=msg.transforms[idx].transform.translation
-	    orientation_list = [msg.transforms[idx].transform.rotation.x, msg.transforms[idx].transform.rotation.y, msg.transforms[idx].transform.rotation.z, msg.transforms[idx].transform.rotation.w]
-	    (self.roll, self.pitch, self.yaw) = euler_from_quaternion(orientation_list)
+		idx=len(msg.transforms)-1
+		if msg.transforms[idx].child_frame_id=="uav/imu":
+		    self.truth=msg.transforms[idx].transform.translation
+		    orientation_list = [msg.transforms[idx].transform.rotation.x, msg.transforms[idx].transform.rotation.y, msg.transforms[idx].transform.rotation.z, msg.transforms[idx].transform.rotation.w]
+		    (self.roll, self.pitch, self.yaw) = euler_from_quaternion(orientation_list)
 
     def input_callback(self,msg):
-	self.input_check=1
-	self.curr_t=time.time()
+		self.input_check=1
+		r=msg.angular_rates.z
 
-	r=msg.angular_rates.z
-	self.dt=(self.curr_t-self.prev_t)
-	# self.euler_integrated_yaw=self.euler_integrated_yaw + r*self.dt
-	self.euler_integrated_yaw=self.euler_integrated_yaw + r*0.0333
+		self.curr_t=time.time()
+		if self.prev_t==0:
+			self.prev_t=time.time()
+			return
+		self.euler_integrated_yaw=self.euler_integrated_yaw + r * (self.curr_t-self.prev_t) # * dt
+		self.prev_t=self.curr_t
 
-	if self.euler_integrated_yaw>np.pi:
-		self.euler_integrated_yaw=self.euler_integrated_yaw-2*np.pi
-	if self.euler_integrated_yaw<-np.pi:
-		self.euler_integrated_yaw=self.euler_integrated_yaw+2*np.pi
-
-	self.prev_t=self.curr_t
+		if self.euler_integrated_yaw>np.pi:
+			self.euler_integrated_yaw=self.euler_integrated_yaw-2*np.pi
+		if self.euler_integrated_yaw<-np.pi:
+			self.euler_integrated_yaw=self.euler_integrated_yaw+2*np.pi
 
 def accelerometer_arctan_estimator(ax,ay,az):
 	roll=atan2(ay,az)
@@ -119,8 +130,8 @@ def LKF_estimator(z,rates,dt,P,x):
 	z=np.array([qw,qx,qy,qz]).reshape((4,1))
 
 	H=np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]])
-	Q=np.array([[0.005,0,0,0],[0,0.005,0,0],[0,0,0.005,0],[0,0,0,0.005]])
-	R=np.array([[3000,0,0,0],[0,3000,0,0],[0,0,3000,0],[0,0,0,3000]])
+	Q=np.array([[0.001,0,0,0],[0,0.001,0,0],[0,0,0.001,0],[0,0,0,0.001]])
+	R=np.array([[7000,0,0,0],[0,7000,0,0],[0,0,7000,0],[0,0,0,7000]])
 	
 	A=np.array([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]) + \
 	dt*0.5*np.array([[0,-p,-q,-r],[p,0,r,-q],[q,-r,0,p],[r,q,-p,0]])
@@ -144,7 +155,7 @@ def EKF_estimator(z,rates,dt,P,x):
 
 	H=np.array([[1,0,0],[0,1,0],[0,0,0]])
 	Q=np.array([[0.001,0,0],[0,0.001,0],[0,0,0.001]]) #Process noise
-	R=np.array([[3000,0,0],[0,3000,0],[0,0,3000]]) #Sensor noise
+	R=np.array([[7000,0,0],[0,7000,0],[0,0,7000]]) #Sensor noise
 
 	A=np.array([[1,0,0],[0,1,0],[0,0,1]]) + \
 	dt * np.array([[q*cos(roll)*tan(pitch)-r*sin(roll)*tan(pitch), (q*sin(roll)+r*cos(roll))*pow(sec(pitch),2), 0], \
@@ -166,16 +177,50 @@ def EKF_estimator(z,rates,dt,P,x):
 	
 	return x,P
 
-def UKF_estimator(z,rates,dt,P,x):
+def gyrobias_estimator(z,rates,dt,P,x):
 	p=rates[0]
 	q=rates[1]
 	r=rates[2]
 	roll=x[0]
 	pitch=x[1]
 	yaw=x[2]
+	z=z.reshape((2,1)) #roll, pitch
 
-def CF_estimator():
-	pass
+	A=np.array([[1,-dt,0,0],[0,1,0,0],[0,0,1,-dt],[0,0,0,1]])
+	B=np.array([[dt,0],[0,0],[0,dt],[0,0]])
+
+	H=np.array([[1,0,0,0],[0,0,1,0]])
+	Q=np.array([[0.001,0,0,0],[0,0.001,0,0],[0,0,0.001,0],[0,0,0,0.001]]) #Process noise
+	# Q=np.dot(np.dot(B,R),R.transpose())
+	R=np.array([[7000,0,0,0],[0,7000,0,0],[0,0,7000,0],[0,0,0,7000]]) #Sensor noise
+
+	
+
+	x_=np.dot(A,x)+np.dot(B,u)
+	x_=x_.reshape((4,1))
+	P_=np.dot(np.dot(A,P),A.transpose()) + Q
+
+	K =np.dot(P_,H.transpose())*inv(np.dot(np.dot(H,P_),H.transpose()) + R)
+
+	P =P_ - np.dot(np.dot(K,H),P_)
+	if abs(np.amax(P))>1e+06:
+		P=np.array([[100,0,0],[0,100,0],[0,0,100]])
+		x=x
+		return x,P
+	x =x_ + np.dot(K,(z-np.dot(H,x_)))
+	
+	return x,P
+
+# def UKF_estimator(z,rates,dt,P,x):
+# 	p=rates[0]
+# 	q=rates[1]
+# 	r=rates[2]
+# 	roll=x[0]
+# 	pitch=x[1]
+# 	yaw=x[2]
+
+# def CF_estimator():
+# 	pass
 
 def sec(x):
 	return 1/cos(x)
@@ -187,10 +232,15 @@ def FirstOrderLPF(PtrPrevOutput, CurInput, CutOffFreq_hz, SamplingTime_sec):
     return LPFOutput
 
 def graphupdate(i):
-	global t
-	# t=t+ekf.dt
-	t=t+0.0333
-	x_time.append(t)
+	global tg
+	global prev_tg
+	if prev_tg==0:
+		prev_tg=time.time()
+		return
+	tg=tg+(time.time()-prev_tg)
+	prev_tg=time.time()
+
+	x_time.append(tg)
 	x_time.popleft()
 	roll_fig.set_xlim(np.amin(x_time),np.amax(x_time))
 	pitch_fig.set_xlim(np.amin(x_time),np.amax(x_time))
@@ -261,10 +311,10 @@ if __name__ == '__main__':
     roll_fig.set_xlabel('seconds')
     roll_fig.set_ylabel('Degree')
     roll_fig.grid(color='gray',linestyle='dotted')
-    roll_fig.set_ylim(-100,100)
+    roll_fig.set_ylim(-35,35)
 
     pitch_fig=fig.add_subplot(3,1,2)
-    pitch_fig.set_ylim(-100,100)
+    pitch_fig.set_ylim(-35,35)
     pitch_fig.set_title('Pitch')
     pitch_fig.set_xlabel('seconds')
     pitch_fig.set_ylabel('Degree')
@@ -297,34 +347,36 @@ if __name__ == '__main__':
     yaw_fig.legend(loc='upper left')
 
     global t
+    global width
     t=0
-    x_time=deque(np.linspace(3,0,num=100))
-    y_roll_truth=deque([0]*100)
-    y_pitch_truth=deque([0]*100)
-    y_yaw_truth=deque([0]*100)
+    width=400
+    x_time=deque(np.linspace(3,0,num=width))
+    y_roll_truth=deque([0]*width)
+    y_pitch_truth=deque([0]*width)
+    y_yaw_truth=deque([0]*width)
 
-    y_roll_accelero=deque([0]*100)
-    y_pitch_accelero=deque([0]*100)
-    y_yaw_accelero=deque([0]*100)
+    y_roll_accelero=deque([0]*width)
+    y_pitch_accelero=deque([0]*width)
+    y_yaw_accelero=deque([0]*width)
 
-    y_roll_LKF=deque([0]*100)
-    y_pitch_LKF=deque([0]*100)
-    y_yaw_LKF=deque([0]*100)
+    y_roll_LKF=deque([0]*width)
+    y_pitch_LKF=deque([0]*width)
+    y_yaw_LKF=deque([0]*width)
 
-    y_roll_EKF=deque([0]*100)
-    y_pitch_EKF=deque([0]*100)
-    y_yaw_EKF=deque([0]*100)
+    y_roll_EKF=deque([0]*width)
+    y_pitch_EKF=deque([0]*width)
+    y_yaw_EKF=deque([0]*width)
 
 
     while 1:
-        try:
-		if ekf.imu_check==1 and ekf.input_check==1:
-			''' Graph update & print '''
-			animation=ani.FuncAnimation(fig,graphupdate,interval=100)
-			plt.tight_layout()
-			plt.show()
+		try:
+			if ekf.imu_check==1 and ekf.input_check==1:
+				''' Graph update & print '''
+				animation=ani.FuncAnimation(fig,graphupdate,interval=100)
+				plt.tight_layout()
+				plt.show()
 
-        except (rospy.ROSInterruptException, SystemExit, KeyboardInterrupt) :
-            sys.exit(0)
-	except :
-	    print("something's wrong")
+		except (rospy.ROSInterruptException, SystemExit, KeyboardInterrupt) :
+			sys.exit(0)
+		except :
+		    print("something's wrong")
