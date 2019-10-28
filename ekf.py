@@ -60,6 +60,8 @@ class ekf():
 		self._x=np.array([1,0,0,0]).reshape((4,1)) #LKF
 		self.bP=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
 		self.bx=np.array([0,0,0,0]).reshape((4,1)) #gyro_bias
+		# self.baP=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
+		# self.bax=np.array([0,0,0,0]).reshape((4,1)) #gyro_accel_bias
 
 
     def imu_callback(self,msg):
@@ -90,6 +92,7 @@ class ekf():
 			self._xe=euler_from_quaternion([self._x[0][0],self._x[1][0],self._x[2][0],self._x[3][0]])
 			self.x,self.P=EKF_estimator(np.array([self.t_roll,self.t_pitch,self.euler_integrated_yaw]),[p,q,r],self.dti,self.P,self.x)
 			self.bx,self.bP=gyrobias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.bP,self.bx)
+			# self.bax,self.baP=gyro_accel_bias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.baP,self.bax)
 
     def tf_callback(self,msg):
 		idx=len(msg.transforms)-1
@@ -213,6 +216,60 @@ def gyrobias_estimator(z,rates,dt,P,x): # x = [roll, roll_bias, pitch, pitch_bia
 	
 	return x,P
 
+
+
+
+# Ra=deque([0]*3) #residual
+# def gyro_accel_bias_estimator(z,rates,dt,P,x): # x = [roll, roll_bias, pitch, pitch_bias]
+# 	p=rates[0]
+# 	q=rates[1]
+# 	r=rates[2]
+# 	u_temp=np.dot(np.array([[cos(x[2]),0,0],[0,1,0],[sin(x[2]),0,1]]), np.array([p,q,r]).transpose())
+# 	u=np.array([u_temp[0],u_temp[1]]).reshape((2,1))
+# 	roll=x[0]
+# 	pitch=x[1]
+# 	yaw=x[2]
+# 	z=z.reshape((2,1)) #roll, pitch
+
+# 	A=np.array([[1,-dt,0,0],[0,1,0,0],[0,0,1,-dt],[0,0,0,1]])
+# 	B=np.array([[dt,0],[0,0],[0,dt],[0,0]])
+
+# 	H=np.array([[1,0,0,0],[0,0,1,0]])
+# 	Q=np.array([[0.0001,0,0,0],[0,0.0001,0,0],[0,0,0.0001,0],[0,0,0,0.0001]]) #Process noise
+# 	R=np.array([[5000,0],[0,5000]]) #Sensor noise
+# 	# Q=np.dot(np.dot(B,R),B.transpose())*0.1 #Process noise
+
+# 	x_=np.dot(A,x)+np.dot(B,u)
+# 	x_=x_.reshape((4,1))
+# 	P_=np.dot(np.dot(A,P),A.transpose()) + Q
+
+
+# 	Ra.popleft()
+# 	Ra.append(z-np.dot(H,x_)) # residual
+# 	Uk=np.array([[0,0],[0,0]])
+# 	if type(Ra[0])!=int:
+# 		for j in range(3):
+# 			ra_temp=np.array(Ra[j]).reshape((2,1))
+# 			Uk=Uk + np.dot(ra_temp,ra_temp.transpose())
+# 		Uk=Uk/3
+# 		lamda, vector=np.linalg.eig(Uk) # eigen value and eigen vector
+
+# 		mu_ik=np.array([])
+# 		for i in range(len(vector)):
+# 			mu_ik.append(vector[i].transpose() * (np.dot(np.dot(H,P_),H.transpose()) + R) * vector[i])
+
+# 	K_temp = np.dot(H.transpose(),inv(np.dot(np.dot(H,P_),H.transpose()) + R))
+# 	K =np.dot(P_,K_temp)
+
+# 	P =P_ - np.dot(np.dot(K,H),P_)
+# 	if abs(np.amax(P))>1e+06:
+# 		P=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
+# 		x=x
+# 		return x,P
+# 	x =x_ + np.dot(K,z-np.dot(H,x_))
+	
+# 	return x,P
+
 # def UKF_estimator(z,rates,dt,P,x):
 # 	p=rates[0]
 # 	q=rates[1]
@@ -298,77 +355,77 @@ def graphupdate(i):
 
 if __name__ == '__main__':
 
-    ekf=ekf()
+	ekf=ekf()
 
-    ''' For Graph '''
-    fig=plt.figure(figsize=(8,8))
+	''' For Graph '''
+	fig=plt.figure(figsize=(8,8))
 
-    roll_fig=fig.add_subplot(2,1,1)
-    roll_fig.set_title('Roll')
-    roll_fig.set_xlabel('seconds')
-    roll_fig.set_ylabel('Degree')
-    roll_fig.grid(color='gray',linestyle='dotted',alpha=0.8)
-    roll_fig.set_ylim(-35,35)
+	roll_fig=fig.add_subplot(2,1,1)
+	roll_fig.set_title('Roll')
+	roll_fig.set_xlabel('seconds')
+	roll_fig.set_ylabel('Degree')
+	roll_fig.grid(color='gray',linestyle='dotted',alpha=0.8)
+	roll_fig.set_ylim(-35,35)
 
-    pitch_fig=fig.add_subplot(2,1,2)
-    pitch_fig.set_ylim(-35,35)
-    pitch_fig.set_title('Pitch')
-    pitch_fig.set_xlabel('seconds')
-    pitch_fig.set_ylabel('Degree')
-    pitch_fig.grid(color='gray',linestyle='dotted',alpha=0.8)
+	pitch_fig=fig.add_subplot(2,1,2)
+	pitch_fig.set_ylim(-35,35)
+	pitch_fig.set_title('Pitch')
+	pitch_fig.set_xlabel('seconds')
+	pitch_fig.set_ylabel('Degree')
+	pitch_fig.grid(color='gray',linestyle='dotted',alpha=0.8)
 
-    # yaw_fig=fig.add_subplot(3,1,3)
-    # yaw_fig.set_ylim(-185,185)
-    # yaw_fig.set_title('Yaw')
-    # yaw_fig.set_xlabel('seconds')
-    # yaw_fig.set_ylabel('Degree')
-    # yaw_fig.grid(color='gray',linestyle='dotted')
+	# yaw_fig=fig.add_subplot(3,1,3)
+	# yaw_fig.set_ylim(-185,185)
+	# yaw_fig.set_title('Yaw')
+	# yaw_fig.set_xlabel('seconds')
+	# yaw_fig.set_ylabel('Degree')
+	# yaw_fig.grid(color='gray',linestyle='dotted')
 
-    roll_line1,=roll_fig.plot([],[],color='blue',label='Truth')
-    # roll_line2,=roll_fig.plot([],[],color='black',label='Accelero',linewidth=0.7,alpha=0.8)
-    # roll_line3,=roll_fig.plot([],[],color='green',label='LKF',linewidth=0.7,alpha=0.8)
-    roll_line4,=roll_fig.plot([],[],color='red',label='EKF')
-    roll_line5,=roll_fig.plot([],[],color='magenta',label='Gyro Bias-LKF')
+	roll_line1,=roll_fig.plot([],[],color='blue',label='Truth')
+	# roll_line2,=roll_fig.plot([],[],color='black',label='Accelero',linewidth=0.7,alpha=0.8)
+	# roll_line3,=roll_fig.plot([],[],color='green',label='LKF',linewidth=0.7,alpha=0.8)
+	roll_line4,=roll_fig.plot([],[],color='red',label='EKF')
+	roll_line5,=roll_fig.plot([],[],color='magenta',label='Gyro Bias-LKF')
 
-    pitch_line1,=pitch_fig.plot([],[],color='blue',label='Truth')
-    # pitch_line2,=pitch_fig.plot([],[],color='black',label='Accelero',linewidth=0.7,alpha=0.8)
-    # pitch_line3,=pitch_fig.plot([],[],color='green',label='LKF',linewidth=0.7,alpha=0.8)
-    pitch_line4,=pitch_fig.plot([],[],color='red',label='EKF')
-    pitch_line5,=pitch_fig.plot([],[],color='magenta',label='Gyro Bias-LKF')
+	pitch_line1,=pitch_fig.plot([],[],color='blue',label='Truth')
+	# pitch_line2,=pitch_fig.plot([],[],color='black',label='Accelero',linewidth=0.7,alpha=0.8)
+	# pitch_line3,=pitch_fig.plot([],[],color='green',label='LKF',linewidth=0.7,alpha=0.8)
+	pitch_line4,=pitch_fig.plot([],[],color='red',label='EKF')
+	pitch_line5,=pitch_fig.plot([],[],color='magenta',label='Gyro Bias-LKF')
 
-    # yaw_line1,=yaw_fig.plot([],[],color='blue',label='Truth',linewidth=1,alpha=0.8)
-    # yaw_line2,=yaw_fig.plot([],[],color='black',label='Euler_integrated',linewidth=1,alpha=0.8)
+	# yaw_line1,=yaw_fig.plot([],[],color='blue',label='Truth',linewidth=1,alpha=0.8)
+	# yaw_line2,=yaw_fig.plot([],[],color='black',label='Euler_integrated',linewidth=1,alpha=0.8)
 
-    roll_fig.legend(loc='upper left')
-    pitch_fig.legend(loc='upper left')
-    # yaw_fig.legend(loc='upper left')
+	roll_fig.legend(loc='upper left')
+	pitch_fig.legend(loc='upper left')
+	# yaw_fig.legend(loc='upper left')
 
-    global t
-    global width
-    t=0
-    width=100
-    x_time=deque(np.linspace(3,0,num=width))
-    y_roll_truth=deque([0]*width)
-    y_pitch_truth=deque([0]*width)
-    y_yaw_truth=deque([0]*width)
+	global t
+	global width
+	t=0
+	width=100
+	x_time=deque(np.linspace(3,0,num=width))
+	y_roll_truth=deque([0]*width)
+	y_pitch_truth=deque([0]*width)
+	y_yaw_truth=deque([0]*width)
 
-    y_roll_accelero=deque([0]*width)
-    y_pitch_accelero=deque([0]*width)
-    y_yaw_accelero=deque([0]*width)
+	y_roll_accelero=deque([0]*width)
+	y_pitch_accelero=deque([0]*width)
+	y_yaw_accelero=deque([0]*width)
 
-    y_roll_LKF=deque([0]*width)
-    y_pitch_LKF=deque([0]*width)
-    y_yaw_LKF=deque([0]*width)
+	y_roll_LKF=deque([0]*width)
+	y_pitch_LKF=deque([0]*width)
+	y_yaw_LKF=deque([0]*width)
 
-    y_roll_EKF=deque([0]*width)
-    y_pitch_EKF=deque([0]*width)
-    y_yaw_EKF=deque([0]*width)
+	y_roll_EKF=deque([0]*width)
+	y_pitch_EKF=deque([0]*width)
+	y_yaw_EKF=deque([0]*width)
 
-    y_roll_bias=deque([0]*width)
-    y_pitch_bias=deque([0]*width)
-    y_yaw_bias=deque([0]*width)
+	y_roll_bias=deque([0]*width)
+	y_pitch_bias=deque([0]*width)
+	y_yaw_bias=deque([0]*width)
 
-    while 1:
+	while 1:
 		try:
 			if ekf.imu_check==1 and ekf.input_check==1:
 				''' Graph update & print '''
@@ -379,4 +436,4 @@ if __name__ == '__main__':
 		except (rospy.ROSInterruptException, SystemExit, KeyboardInterrupt) :
 			sys.exit(0)
 		except :
-		    print("something's wrong")
+			print("something's wrong")
