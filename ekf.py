@@ -35,6 +35,8 @@ global tg
 global prev_tg
 tg=0
 prev_tg=0
+global first
+first = 0 
 
 class ekf():
     def __init__(self):
@@ -60,8 +62,8 @@ class ekf():
 		self._x=np.array([1,0,0,0]).reshape((4,1)) #LKF
 		self.bP=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
 		self.bx=np.array([0,0,0,0]).reshape((4,1)) #gyro_bias
-		# self.baP=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
-		# self.bax=np.array([0,0,0,0]).reshape((4,1)) #gyro_accel_bias
+		self.baP=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
+		self.bax=np.array([0,0,0,0]).reshape((4,1)) #gyro_accel_bias
 
 
     def imu_callback(self,msg):
@@ -92,7 +94,7 @@ class ekf():
 			self._xe=euler_from_quaternion([self._x[0][0],self._x[1][0],self._x[2][0],self._x[3][0]])
 			self.x,self.P=EKF_estimator(np.array([self.t_roll,self.t_pitch,self.euler_integrated_yaw]),[p,q,r],self.dti,self.P,self.x)
 			self.bx,self.bP=gyrobias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.bP,self.bx)
-			# self.bax,self.baP=gyro_accel_bias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.baP,self.bax)
+			# self.bax,self.baP=gyro_accel_bias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.baP,self.bax) meaningless when R is big..
 
     def tf_callback(self,msg):
 		idx=len(msg.transforms)-1
@@ -117,12 +119,12 @@ class ekf():
 		if self.euler_integrated_yaw<-np.pi:
 			self.euler_integrated_yaw=self.euler_integrated_yaw+2*np.pi
 
-def accelerometer_arctan_estimator(ax,ay,az):
-	# roll=atan2(ay,az) #book
+def accelerometer_arctan_estimator(ax,ay,az): # orientation must be checked before used.
+	# roll=atan2(ay,az) #book - roll->pitch order
 	# pitch=atan2(ax,sqrt(pow(ay,2)+pow(az,2)))
-	roll=atan2(ay,sqrt(pow(ax,2)+pow(az,2))) # paper
+	roll=atan2(ay,sqrt(pow(ax,2)+pow(az,2))) # paper - roll->pitch order, different accel orientation.
 	pitch=atan2(-ax,az)
-	# roll=atan2(ay,sqrt(pow(ax,2)+pow(az,2))) #inhwan
+	# roll=atan2(ay,sqrt(pow(ax,2)+pow(az,2))) #InHwan - pitch->roll order
 	# pitch=atan2(ax,az)
 	return roll,pitch
 
@@ -185,20 +187,19 @@ def gyrobias_estimator(z,rates,dt,P,x): # x = [roll, roll_bias, pitch, pitch_bia
 	p=rates[0]
 	q=rates[1]
 	r=rates[2]
-	u_temp=np.dot(np.array([[cos(x[2]),0,0],[0,1,0],[sin(x[2]),0,1]]), np.array([p,q,r]).transpose())
-	u=np.array([u_temp[0],u_temp[1]]).reshape((2,1))
-	roll=x[0]
-	pitch=x[1]
-	yaw=x[2]
+	# u=np.array([p*cos(x[2]),q,p*sin(x[2])+r])# as paper, too much approximated.
+	u=np.array([p + tan(x[2])*(q*sin(x[0])+r*cos(x[0])) , q*cos(x[0])-r*sin(x[0])]).reshape((2,1)) # as conventional, universal
+
 	z=z.reshape((2,1)) #roll, pitch
 
 	A=np.array([[1,-dt,0,0],[0,1,0,0],[0,0,1,-dt],[0,0,0,1]])
 	B=np.array([[dt,0],[0,0],[0,dt],[0,0]])
 
-	H=np.array([[1,0,0,0],[0,0,1,0]])
+	H=np.array([[1,0,0,0],[0,0,1,0]]) # as paper, correct
+	# H=np.array([[0,0,1,0],[-1,0,0,0]]) # as reference paper, typo?
 	Q=np.array([[0.0001,0,0,0],[0,0.0001,0,0],[0,0,0.0001,0],[0,0,0,0.0001]]) #Process noise
 	R=np.array([[5000,0],[0,5000]]) #Sensor noise
-	# Q=np.dot(np.dot(B,R),B.transpose())*0.1 #Process noise
+	# Q=np.dot(np.dot(B,R),B.transpose()) #Process noise as paper
 
 	x_=np.dot(A,x)+np.dot(B,u)
 	x_=x_.reshape((4,1))
@@ -208,67 +209,72 @@ def gyrobias_estimator(z,rates,dt,P,x): # x = [roll, roll_bias, pitch, pitch_bia
 	K =np.dot(P_,K_temp)
 
 	P =P_ - np.dot(np.dot(K,H),P_)
-	if abs(np.amax(P))>1e+06:
-		P=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
-		x=x
-		return x,P
 	x =x_ + np.dot(K,(z-np.dot(H,x_)))
 	
 	return x,P
 
 
+Ra=deque([0]*3) #residual
+lamda=deque([0]*3) #eigen value
+vector=deque([0]*3) #eigen vector
+mu=deque([0]*3) # criteria for external accel
+global check
+check=0
+# R is so big, accel_bias cannot be considered (already being so)
+def gyro_accel_bias_estimator(z,rates,dt,P,x): # x = [roll, roll_bias, pitch, pitch_bias]
+	global check
+	p=rates[0]
+	q=rates[1]
+	r=rates[2]
+	# u=np.array([p*cos(x[2]),q,p*sin(x[2])+r])# as paper, too much approximated.
+	u=np.array([p + tan(x[2])*(q*sin(x[0])+r*cos(x[0])) , q*cos(x[0])-r*sin(x[0])]).reshape((2,1)) # as conventional, universal
+
+	z=z.reshape((2,1)) #roll, pitch
+
+	A=np.array([[1,-dt,0,0],[0,1,0,0],[0,0,1,-dt],[0,0,0,1]])
+	B=np.array([[dt,0],[0,0],[0,dt],[0,0]])
+
+	H=np.array([[1,0,0,0],[0,0,1,0]])
+	Q=np.array([[0.0001,0,0,0],[0,0.0001,0,0],[0,0,0.0001,0],[0,0,0,0.0001]]) #Process noise
+	R=np.array([[5000,0],[0,5000]]) #Sensor noise
+	R_acc=np.array([[0,0],[0,0]]) # external acceleration 
+	# Q=np.dot(np.dot(B,R),B.transpose())*0.1 #Process noise
+
+	x_=np.dot(A,x)+np.dot(B,u)
+	x_=x_.reshape((4,1))
+	P_=np.dot(np.dot(A,P),A.transpose()) + Q
 
 
-# Ra=deque([0]*3) #residual
-# def gyro_accel_bias_estimator(z,rates,dt,P,x): # x = [roll, roll_bias, pitch, pitch_bias]
-# 	p=rates[0]
-# 	q=rates[1]
-# 	r=rates[2]
-# 	u_temp=np.dot(np.array([[cos(x[2]),0,0],[0,1,0],[sin(x[2]),0,1]]), np.array([p,q,r]).transpose())
-# 	u=np.array([u_temp[0],u_temp[1]]).reshape((2,1))
-# 	roll=x[0]
-# 	pitch=x[1]
-# 	yaw=x[2]
-# 	z=z.reshape((2,1)) #roll, pitch
+	Ra.popleft()
+	Ra.append(z-np.dot(H,x_)) # residual
+	Uk=np.array([[0,0],[0,0]])
+	if type(Ra[0])!=int:
+		for j in range(3):
+			ra_temp=np.array(Ra[j]).reshape((2,1))
+			Uk=Uk + np.dot(ra_temp,ra_temp.transpose())
+		Uk=Uk/3
+		lamda_temp, vector_temp=np.linalg.eig(Uk) # eigen value and eigen vector
+		lamda.popleft()		
+		lamda.append(lamda_temp)
+		vector.popleft()		
+		vector.append(vector_temp)
 
-# 	A=np.array([[1,-dt,0,0],[0,1,0,0],[0,0,1,-dt],[0,0,0,1]])
-# 	B=np.array([[dt,0],[0,0],[0,dt],[0,0]])
+		if type(vector[0])!=int:
+			mu.popleft()			
+			mu.append([np.dot(np.dot(vector[2][0].transpose() ,(np.dot(np.dot(H,P_),H.transpose())) + R) , vector[2][0]), np.dot(np.dot(vector[2][1].transpose() ,(np.dot(np.dot(H,P_),H.transpose())) + R) , vector[2][1])])
+			if np.amax([lamda[0][0]-mu[0][0],lamda[0][1]-mu[0][1], lamda[1][0]-mu[1][0],lamda[1][1]-mu[1][1], lamda[2][0]-mu[2][0],lamda[2][1]-mu[2][1]])<0.1:
+				R_acc=np.array([[0,0],[0,0]])
+			else :
+				R_acc=max([lamda[2][0]-mu[2][0], 0])*np.dot(vector[2][0].reshape((2,1)),vector[2][0].reshape((2,1)).transpose()) + \
+				max([lamda[2][1]-mu[2][1], 0])*np.dot(vector[2][1].reshape((2,1)),vector[2][1].reshape((2,1)).transpose())
 
-# 	H=np.array([[1,0,0,0],[0,0,1,0]])
-# 	Q=np.array([[0.0001,0,0,0],[0,0.0001,0,0],[0,0,0.0001,0],[0,0,0,0.0001]]) #Process noise
-# 	R=np.array([[5000,0],[0,5000]]) #Sensor noise
-# 	# Q=np.dot(np.dot(B,R),B.transpose())*0.1 #Process noise
+	K_temp = np.dot(H.transpose(),inv(np.dot(np.dot(H,P_),H.transpose()) + R + R_acc))
+	K =np.dot(P_,K_temp)
 
-# 	x_=np.dot(A,x)+np.dot(B,u)
-# 	x_=x_.reshape((4,1))
-# 	P_=np.dot(np.dot(A,P),A.transpose()) + Q
-
-
-# 	Ra.popleft()
-# 	Ra.append(z-np.dot(H,x_)) # residual
-# 	Uk=np.array([[0,0],[0,0]])
-# 	if type(Ra[0])!=int:
-# 		for j in range(3):
-# 			ra_temp=np.array(Ra[j]).reshape((2,1))
-# 			Uk=Uk + np.dot(ra_temp,ra_temp.transpose())
-# 		Uk=Uk/3
-# 		lamda, vector=np.linalg.eig(Uk) # eigen value and eigen vector
-
-# 		mu_ik=np.array([])
-# 		for i in range(len(vector)):
-# 			mu_ik.append(vector[i].transpose() * (np.dot(np.dot(H,P_),H.transpose()) + R) * vector[i])
-
-# 	K_temp = np.dot(H.transpose(),inv(np.dot(np.dot(H,P_),H.transpose()) + R))
-# 	K =np.dot(P_,K_temp)
-
-# 	P =P_ - np.dot(np.dot(K,H),P_)
-# 	if abs(np.amax(P))>1e+06:
-# 		P=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
-# 		x=x
-# 		return x,P
-# 	x =x_ + np.dot(K,z-np.dot(H,x_))
+	P =P_ - np.dot(np.dot(K,H),P_)
+	x =x_ + np.dot(K,z-np.dot(H,x_))
 	
-# 	return x,P
+	return x,P
 
 # def UKF_estimator(z,rates,dt,P,x):
 # 	p=rates[0]
