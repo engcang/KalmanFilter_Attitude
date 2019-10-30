@@ -94,7 +94,7 @@ class ekf():
 			self._xe=euler_from_quaternion([self._x[0][0],self._x[1][0],self._x[2][0],self._x[3][0]])
 			self.x,self.P=EKF_estimator(np.array([self.t_roll,self.t_pitch,self.euler_integrated_yaw]),[p,q,r],self.dti,self.P,self.x)
 			self.bx,self.bP=gyrobias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.bP,self.bx)
-			# self.bax,self.baP=gyro_accel_bias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.baP,self.bax) meaningless when R is big..
+			self.bax,self.baP=gyro_accel_bias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.baP,self.bax) #meaningless when R is big..
 
     def tf_callback(self,msg):
 		idx=len(msg.transforms)-1
@@ -262,11 +262,12 @@ def gyro_accel_bias_estimator(z,rates,dt,P,x): # x = [roll, roll_bias, pitch, pi
 		if type(vector[0])!=int:
 			mu.popleft()			
 			mu.append([np.dot(np.dot(vector[2][0].transpose() ,(np.dot(np.dot(H,P_),H.transpose())) + R) , vector[2][0]), np.dot(np.dot(vector[2][1].transpose() ,(np.dot(np.dot(H,P_),H.transpose())) + R) , vector[2][1])])
-			if np.amax([lamda[0][0]-mu[0][0],lamda[0][1]-mu[0][1], lamda[1][0]-mu[1][0],lamda[1][1]-mu[1][1], lamda[2][0]-mu[2][0],lamda[2][1]-mu[2][1]])<0.1:
-				R_acc=np.array([[0,0],[0,0]])
-			else :
-				R_acc=max([lamda[2][0]-mu[2][0], 0])*np.dot(vector[2][0].reshape((2,1)),vector[2][0].reshape((2,1)).transpose()) + \
-				max([lamda[2][1]-mu[2][1], 0])*np.dot(vector[2][1].reshape((2,1)),vector[2][1].reshape((2,1)).transpose())
+			if type(mu[0])!=int:
+				if np.amax([lamda[0][0]-mu[0][0],lamda[0][1]-mu[0][1], lamda[1][0]-mu[1][0],lamda[1][1]-mu[1][1], lamda[2][0]-mu[2][0],lamda[2][1]-mu[2][1]])<0.1:
+					R_acc=np.array([[0,0],[0,0]])
+				else :
+					R_acc=max([lamda[2][0]-mu[2][0], 0])*np.dot(vector[2][0].reshape((2,1)),vector[2][0].reshape((2,1)).transpose()) + \
+					max([lamda[2][1]-mu[2][1], 0])*np.dot(vector[2][1].reshape((2,1)),vector[2][1].reshape((2,1)).transpose())
 
 	K_temp = np.dot(H.transpose(),inv(np.dot(np.dot(H,P_),H.transpose()) + R + R_acc))
 	K =np.dot(P_,K_temp)
@@ -357,6 +358,7 @@ def graphupdate(i):
 	print("LKF###### roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf._xe[0]*r2d,ekf._xe[1]*r2d,ekf._xe[2]*r2d))
 	print("##EKF#### roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf.x[0]*r2d, ekf.x[1]*r2d, ekf.x[2]*r2d))
 	print("###bias## roll: %.1f, pitch: %.1f, bias: %.1f ,  %.1f "%(ekf.bx[0]*r2d, ekf.bx[2]*r2d, ekf.bx[1]*r2d, ekf.bx[3]*r2d))
+	print("###bias## roll: %.1f, pitch: %.1f, bias: %.1f ,  %.1f "%(ekf.bax[0]*r2d, ekf.bax[2]*r2d, ekf.bax[1]*r2d, ekf.bax[3]*r2d))
 	print("#####TRUE roll: %.1f, pitch: %.1f, yaw: %.1f \n\n\n"%(ekf.roll*r2d, ekf.pitch*r2d, ekf.yaw*r2d))
 
 if __name__ == '__main__':
