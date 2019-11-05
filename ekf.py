@@ -58,12 +58,14 @@ class ekf():
 
 		self.P=np.array([[100,0,0],[0,100,0],[0,0,100]])
 		self.x=np.array([0,0,0]).reshape((3,1)) #EKF
-		self._P=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
-		self._x=np.array([1,0,0,0]).reshape((4,1)) #LKF
+#	self._P=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
+#	self._x=np.array([1,0,0,0]).reshape((4,1)) #LKF
 		self.bP=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
 		self.bx=np.array([0,0,0,0]).reshape((4,1)) #gyro_bias
-		self.baP=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
-		self.bax=np.array([0,0,0,0]).reshape((4,1)) #gyro_accel_bias
+#	self.baP=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
+#	self.bax=np.array([0,0,0,0]).reshape((4,1)) #gyro_accel_bias
+		self.P_b=np.array([[100,0,0,0,0,0],[0,100,0,0,0,0],[0,0,100,0,0,0],[0,0,0,100,0,0],[0,0,0,0,100,0],[0,0,0,0,0,100]])
+		self.x_b=np.array([0,0,0,0,0,0]).reshape((6,1)) #EKF_gyro_bias
 
 
     def imu_callback(self,msg):
@@ -90,11 +92,12 @@ class ekf():
 			''' Filtering '''
 			self.t_roll,self.t_pitch=accelerometer_arctan_estimator(ax,ay,az)
 
-			self._x,self._P=LKF_estimator([self.t_roll,self.t_pitch,self.euler_integrated_yaw],[p,q,r],self.dti,self._P,self._x)
-			self._xe=euler_from_quaternion([self._x[0][0],self._x[1][0],self._x[2][0],self._x[3][0]])
+			#self._x,self._P=LKF_estimator([self.t_roll,self.t_pitch,self.euler_integrated_yaw],[p,q,r],self.dti,self._P,self._x)
+			#self._xe=euler_from_quaternion([self._x[0][0],self._x[1][0],self._x[2][0],self._x[3][0]])
 			self.x,self.P=EKF_estimator(np.array([self.t_roll,self.t_pitch,self.euler_integrated_yaw]),[p,q,r],self.dti,self.P,self.x)
 			self.bx,self.bP=gyrobias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.bP,self.bx)
-			self.bax,self.baP=gyro_accel_bias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.baP,self.bax) #meaningless when R is big..
+			#self.bax,self.baP=gyro_accel_bias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.baP,self.bax) #meaningless when R is big..
+			self.x_b,self.P_b=EKF_estimator_gyro_bias(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.P_b,self.x_b)
 
     def tf_callback(self,msg):
 		idx=len(msg.transforms)-1
@@ -277,6 +280,39 @@ def gyro_accel_bias_estimator(z,rates,dt,P,x): # x = [roll, roll_bias, pitch, pi
 	
 	return x,P
 
+def EKF_estimator_gyro_bias(z,rates,dt,P,x): # X = [roll pitch yaw rollbias pitchbias yawbias]
+	p=rates[0]
+	q=rates[1]
+	r=rates[2]
+	roll=x[0]
+	pitch=x[1]
+	yaw=x[2]
+	r_bias=x[3]
+	p_bias=x[4]
+	y_bias=x[5]
+	z=z.reshape((2,1))
+
+	H=np.array([[1,0,0,0,0,0],[0,1,0,0,0,0]])
+	Q=np.array([[0.0001,0,0,0,0,0],[0,0.0001,0,0,0,0],[0,0,0.0001,0,0,0],[0,0,0,0.0001,0,0],[0,0,0,0,0.0001,0],[0,0,0,0,0,0.0001]]) #Process noise
+	R=np.array([[5000,0],[0,5000]]) #Sensor noise
+
+	A=np.array([[1+ dt*(q*cos(roll)*tan(pitch)-r*sin(roll)*tan(pitch)), dt*(q*sin(roll)+r*cos(roll))*pow(sec(pitch),2), 0, -dt, 0, 0], [dt*(-q*sin(roll)-r*cos(roll)), 1, 0, 0, -dt, 0], [dt*(q*cos(roll)-r*sin(roll))*sec(pitch), dt*(q*sin(roll)+r*cos(roll))*sec(pitch)*tan(pitch), 1, 0, 0, -dt], [0,0,0,1,0,0], [0,0,0,0,1,0], [0,0,0,0,0,1]], dtype=np.float32)
+        #A=dt*np.array([[q*cos(roll)*tan(pitch)-r*sin(roll)*tan(pitch), (q*sin(roll)+r*cos(roll))*pow(sec(pitch),2), 0, -1, 0, 0], [-q*sin(roll)-r*cos(roll), 0, 0, 0, -1, 0], [(q*cos(roll)-r*sin(roll))*sec(pitch), (q*sin(roll)+r*cos(roll))*sec(pitch)*tan(pitch), 0, 0, 0, -1], [0,0,0,0,0,0], [0,0,0,0,0,0], [0,0,0,0,0,0]], dtype=np.float64)
+	x_=x + dt*np.array([[p+(q*sin(roll)+r*cos(roll))*tan(pitch) - r_bias], [q*cos(roll)-r*sin(roll) - p_bias], [(q*sin(roll)+r*cos(roll))*sec(pitch) - y_bias], [0], [0], [0]], dtype=np.float32)
+	x_=x_.reshape((6,1))
+	P_=np.dot(np.dot(A,P),A.transpose()) + Q
+
+	K = np.dot( np.dot(P_,H.transpose()), inv(np.dot(np.dot(H,P_),H.transpose()) + R))
+ 
+	P =P_ - np.dot(np.dot(K,H),P_)
+	if abs(np.amax(P))>1e+06:
+		P=np.array([[100,0,0,0,0,0],[0,100,0,0,0,0],[0,0,100,0,0,0],[0,0,0,100,0,0],[0,0,0,0,100,0],[0,0,0,0,0,100]])
+		x=x
+		return x,P
+	x =x_ + np.dot(K,(z-np.dot(H,x_)))
+	
+	return x,P
+
 # def UKF_estimator(z,rates,dt,P,x):
 # 	p=rates[0]
 # 	q=rates[1]
@@ -326,6 +362,10 @@ def graphupdate(i):
 	y_roll_bias.append(ekf.bx[0]*r2d)
 	roll_line5.set_data(x_time,y_roll_bias)
 
+	y_roll_EKF_bias.popleft()
+	y_roll_EKF_bias.append(ekf.x_b[0]*r2d)
+	roll_line6.set_data(x_time,y_roll_EKF_bias)
+
 	y_pitch_truth.popleft()
 	y_pitch_truth.append(ekf.pitch*r2d)
 	pitch_line1.set_data(x_time,y_pitch_truth)
@@ -346,6 +386,10 @@ def graphupdate(i):
 	y_pitch_bias.append(ekf.bx[2]*r2d)
 	pitch_line5.set_data(x_time,y_pitch_bias)
 
+	y_pitch_EKF_bias.popleft()
+	y_pitch_EKF_bias.append(ekf.x[1]*r2d)
+	pitch_line6.set_data(x_time,y_pitch_EKF_bias)
+
 	# y_yaw_truth.popleft()
 	# y_yaw_truth.append(ekf.yaw*r2d)
 	# yaw_line1.set_data(x_time,y_yaw_truth)
@@ -355,10 +399,11 @@ def graphupdate(i):
 	# yaw_line2.set_data(x_time,y_yaw_accelero)
 
 	print("estimated roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf.t_roll*r2d,ekf.t_pitch*r2d,ekf.euler_integrated_yaw*r2d))
-	print("LKF###### roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf._xe[0]*r2d,ekf._xe[1]*r2d,ekf._xe[2]*r2d))
+#	print("LKF###### roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf._xe[0]*r2d,ekf._xe[1]*r2d,ekf._xe[2]*r2d))
 	print("##EKF#### roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf.x[0]*r2d, ekf.x[1]*r2d, ekf.x[2]*r2d))
 	print("###bias## roll: %.1f, pitch: %.1f, bias: %.1f ,  %.1f "%(ekf.bx[0]*r2d, ekf.bx[2]*r2d, ekf.bx[1]*r2d, ekf.bx[3]*r2d))
-	print("###bias## roll: %.1f, pitch: %.1f, bias: %.1f ,  %.1f "%(ekf.bax[0]*r2d, ekf.bax[2]*r2d, ekf.bax[1]*r2d, ekf.bax[3]*r2d))
+#	print("###bias## roll: %.1f, pitch: %.1f, bias: %.1f ,  %.1f "%(ekf.bax[0]*r2d, ekf.bax[2]*r2d, ekf.bax[1]*r2d, ekf.bax[3]*r2d))
+	print("####Bias# roll: %.1f, pitch: %.1f, bias: %.1f ,  %.1f "%(ekf.x_b[0]*r2d, ekf.x_b[1]*r2d, ekf.x_b[3]*r2d, ekf.x_b[4]*r2d))
 	print("#####TRUE roll: %.1f, pitch: %.1f, yaw: %.1f \n\n\n"%(ekf.roll*r2d, ekf.pitch*r2d, ekf.yaw*r2d))
 
 if __name__ == '__main__':
@@ -394,12 +439,14 @@ if __name__ == '__main__':
 	# roll_line3,=roll_fig.plot([],[],color='green',label='LKF',linewidth=0.7,alpha=0.8)
 	roll_line4,=roll_fig.plot([],[],color='red',label='EKF')
 	roll_line5,=roll_fig.plot([],[],color='magenta',label='Gyro Bias-LKF')
+	roll_line6,=roll_fig.plot([],[],color='green',label='Gyro Bias-EKF')
 
 	pitch_line1,=pitch_fig.plot([],[],color='blue',label='Truth')
 	# pitch_line2,=pitch_fig.plot([],[],color='black',label='Accelero',linewidth=0.7,alpha=0.8)
 	# pitch_line3,=pitch_fig.plot([],[],color='green',label='LKF',linewidth=0.7,alpha=0.8)
 	pitch_line4,=pitch_fig.plot([],[],color='red',label='EKF')
 	pitch_line5,=pitch_fig.plot([],[],color='magenta',label='Gyro Bias-LKF')
+	pitch_line6,=pitch_fig.plot([],[],color='green',label='Gyro Bias-EKF')
 
 	# yaw_line1,=yaw_fig.plot([],[],color='blue',label='Truth',linewidth=1,alpha=0.8)
 	# yaw_line2,=yaw_fig.plot([],[],color='black',label='Euler_integrated',linewidth=1,alpha=0.8)
@@ -415,23 +462,27 @@ if __name__ == '__main__':
 	x_time=deque(np.linspace(3,0,num=width))
 	y_roll_truth=deque([0]*width)
 	y_pitch_truth=deque([0]*width)
-	y_yaw_truth=deque([0]*width)
+#	y_yaw_truth=deque([0]*width)
 
 	y_roll_accelero=deque([0]*width)
 	y_pitch_accelero=deque([0]*width)
-	y_yaw_accelero=deque([0]*width)
+#	y_yaw_accelero=deque([0]*width)
 
-	y_roll_LKF=deque([0]*width)
-	y_pitch_LKF=deque([0]*width)
-	y_yaw_LKF=deque([0]*width)
+#	y_roll_LKF=deque([0]*width)
+#	y_pitch_LKF=deque([0]*width)
+#	y_yaw_LKF=deque([0]*width)
 
 	y_roll_EKF=deque([0]*width)
 	y_pitch_EKF=deque([0]*width)
-	y_yaw_EKF=deque([0]*width)
+#	y_yaw_EKF=deque([0]*width)
 
 	y_roll_bias=deque([0]*width)
 	y_pitch_bias=deque([0]*width)
-	y_yaw_bias=deque([0]*width)
+#	y_yaw_bias=deque([0]*width)
+
+	y_roll_EKF_bias=deque([0]*width)
+	y_pitch_EKF_bias=deque([0]*width)
+#	y_yaw_EKF_bias=deque([0]*width)
 
 	while 1:
 		try:
@@ -444,4 +495,4 @@ if __name__ == '__main__':
 		except (rospy.ROSInterruptException, SystemExit, KeyboardInterrupt) :
 			sys.exit(0)
 		except :
-			print("something's wrong")
+			print("something's wrong")\
