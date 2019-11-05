@@ -69,7 +69,7 @@ class ekf():
 
 
     def imu_callback(self,msg):
-		self.imu_check=1
+		self.imu_check=self.imu_check+1
 		anv=msg.angular_velocity
 		lina=msg.linear_acceleration
 		if self.prev_ti==0:
@@ -82,15 +82,12 @@ class ekf():
 		self.p=anv.x
 		self.q=anv.y
 		self.r=anv.z
-		if self.imu_check==1 and self.input_check==1:
+		if self.imu_check>=1 and self.input_check==1:
 			p=self.p
 			q=self.q
 			r=self.r
-			ax=lina.x
-			ay=lina.y
-			az=lina.z
 			''' Filtering '''
-			self.t_roll,self.t_pitch=accelerometer_arctan_estimator(ax,ay,az)
+			self.t_roll,self.t_pitch=accelerometer_arctan_estimator(lina.x,lina.y,lina.z)
 
 			#self._x,self._P=LKF_estimator([self.t_roll,self.t_pitch,self.euler_integrated_yaw],[p,q,r],self.dti,self._P,self._x)
 			#self._xe=euler_from_quaternion([self._x[0][0],self._x[1][0],self._x[2][0],self._x[3][0]])
@@ -387,7 +384,7 @@ def graphupdate(i):
 	pitch_line5.set_data(x_time,y_pitch_bias)
 
 	y_pitch_EKF_bias.popleft()
-	y_pitch_EKF_bias.append(ekf.x[1]*r2d)
+	y_pitch_EKF_bias.append(ekf.x_b[1]*r2d)
 	pitch_line6.set_data(x_time,y_pitch_EKF_bias)
 
 	# y_yaw_truth.popleft()
@@ -398,7 +395,7 @@ def graphupdate(i):
 	# y_yaw_accelero.append(ekf.euler_integrated_yaw*r2d)
 	# yaw_line2.set_data(x_time,y_yaw_accelero)
 
-	print("estimated roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf.t_roll*r2d,ekf.t_pitch*r2d,ekf.euler_integrated_yaw*r2d))
+#	print("estimated roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf.t_roll*r2d,ekf.t_pitch*r2d,ekf.euler_integrated_yaw*r2d))
 #	print("LKF###### roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf._xe[0]*r2d,ekf._xe[1]*r2d,ekf._xe[2]*r2d))
 	print("##EKF#### roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf.x[0]*r2d, ekf.x[1]*r2d, ekf.x[2]*r2d))
 	print("###bias## roll: %.1f, pitch: %.1f, bias: %.1f ,  %.1f "%(ekf.bx[0]*r2d, ekf.bx[2]*r2d, ekf.bx[1]*r2d, ekf.bx[3]*r2d))
@@ -411,7 +408,7 @@ if __name__ == '__main__':
 	ekf=ekf()
 
 	''' For Graph '''
-	fig=plt.figure(figsize=(8,8))
+	fig=plt.figure(figsize=(10,12))
 
 	roll_fig=fig.add_subplot(2,1,1)
 	roll_fig.set_title('Roll')
@@ -486,13 +483,13 @@ if __name__ == '__main__':
 
 	while 1:
 		try:
-			if ekf.imu_check==1 and ekf.input_check==1:
+			if ekf.imu_check>1 and ekf.input_check==1:
 				''' Graph update & print '''
-				animation=ani.FuncAnimation(fig,graphupdate,interval=150)
+				animation=ani.FuncAnimation(fig,graphupdate,interval=200)
 				plt.tight_layout()
 				plt.show()
 
 		except (rospy.ROSInterruptException, SystemExit, KeyboardInterrupt) :
 			sys.exit(0)
-		except :
-			print("something's wrong")\
+#		except :
+#			print("something's wrong")
