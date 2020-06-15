@@ -6,4 +6,4 @@
 + Python coded, utilized [matplotlib](https://matplotlib.org/) and animation from matplotlib
 
 ### Clip : before tuning [here](https://youtu.be/WSwVizsIJPA)
-### Clip2 : After tuning [here](https://youtu.be/xtPoaAmlnTg)
+### Clip2 : After tuning [here](https://youtu.be/xtPoaAmlnTg) [here2](https://youtu.be/tI-SB5y-WB8)
