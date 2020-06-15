@@ -68,7 +68,6 @@ class ekf():
                                    [0,0,0,0,0,0,0,1,0],
                                    [0,0,0,0,0,0,0,0,1]])
         self.ix=np.array([0,0,0,0,0,0,0,0,0]) #indirect KF
-        self.bias=np.array([0,0,0,0,0,0]) #indirect KF
 
 #		self._P=np.array([[100,0,0,0],[0,100,0,0],[0,0,100,0],[0,0,0,100]])
 #		self._x=np.array([1,0,0,0]).reshape((4,1)) #LKF
@@ -104,8 +103,8 @@ class ekf():
 
             #self._x,self._P=LKF_estimator([self.t_roll,self.t_pitch,self.euler_integrated_yaw],[p,q,r],self.dti,self._P,self._x)
             #self._xe=euler_from_quaternion([self._x[0][0],self._x[1][0],self._x[2][0],self._x[3][0]])
-            self.x,self.P=EKF_estimator(np.array([self.t_roll,self.t_pitch,0]),[p,q,r],self.dti,self.P,self.x)
-            self.ix,self.iP,self.bias = indirect_estimator([ax,ay,az],[p,q,r],self.dti,self.iP,self.ix,self.bias)
+            self.x,self.P = EKF_estimator(np.array([self.t_roll,self.t_pitch,0]),[p,q,r],self.dti,self.P,self.x)
+            self.ix,self.iP = indirect_estimator([ax,ay,az],[p,q,r],self.dti,self.iP,self.ix)
             #self.bx,self.bP=gyrobias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.bP,self.bx)
             #self.bax,self.baP=gyro_accel_bias_estimator(np.array([self.t_roll,self.t_pitch]),[p,q,r],self.dti,self.baP,self.bax) #meaningless when R is big..
 
@@ -119,66 +118,70 @@ class ekf():
     def input_callback(self,msg):
 		self.input_check=1
 
-def indirect_estimator(accel,rates,dt,P,x,bias): # only in NED,
-    nu=0.5
-    p=(rates[0]-bias[3])*dt # NWD->NED ,offset, dt
-    q=(-rates[1]-bias[4])*dt # NWD->NED ,offset, dt
-    r=(-rates[2]-bias[5])*dt # NWD->NED ,offset, dt
-    [qw_p,qx_p,qy_p,qz_p] = quaternion_from_euler(x[0],x[1],x[2]) #previous angles
+def indirect_estimator(accel,rates,dt,P,x): # only in NED,
+    bias = [x[3], x[4], x[5]]
+    prev_accel = [x[6], x[7], x[8]]
+    nu=0.4
+
+    '''Model part'''
+    #1. delta psi
+    p=(rates[0]-x[3])*dt # NWU->NED ,offset, dt
+    q=(-rates[1]-x[4])*dt # NWU->NED ,offset, dt
+    r=(-rates[2]-x[5])*dt # NWU->NED ,offset, dt
+
+    #2. delta Q
     [qw,qx,qy,qz] = quaternion_from_euler(p,q,r) #current angular change
+    [qw_p,qx_p,qy_p,qz_p] = quaternion_from_euler(x[0],x[1],x[2]) #previous angles
+    #3. q- prediction
     [qw_u,qx_u,qy_u,qz_u]=quaternion_multiply([qw_p,qx_p,qy_p,qz_p],[qw,qx,qy,qz]) #updated orientation, prediction
 
+    #4. Estimate g from orientation
     r_prior=quaternion_matrix([qw_u,qx_u,qy_u,qz_u])[:3,:3] # rotation matrix from predicted q_
     gravity_vector_from_orientation = r_prior[:,2].reshape(3,1)
     go=gravity_vector_from_orientation # to use easier
-    gravity_vector_from_accel = np.array([-accel[0]-bias[0], accel[1]-bias[1], accel[2]-bias[2]]) #accel SED(+) -> NED(+)
-#    gravity_vector_from_accel = np.array([accel[0]-bias[0], -accel[1]-bias[1], -accel[2]-bias[2]]) #accel NWU(-) -> NED(-)
+
+    #5. estimate g from accel
+    gravity_vector_from_accel = np.array([accel[0]-x[6], -accel[1]-x[7], -accel[2]-x[8]]) #accel NWU(+) -> NED(+)
     z = gravity_vector_from_orientation - gravity_vector_from_accel.reshape(3,1) #error model
 
+
+    ''' Kalman Equations '''
     H=np.array([[0, go[2], -go[1], 0, -go[2]*dt, go[1]*dt, 1, 0, 0], 
                 [-go[2], 0, go[0], go[2]*dt, 0, -go[0]*dt, 0, 1, 0],
-                [go[1], -go[0], 0, -go[1]*dt, go[0]*dt, 0, 0, 0, 1]]) #from observation model, kappa=1/samplingrate
+                [go[1], -go[0], 0, -go[1]*dt, go[0]*dt, 0, 0, 0, 1]]) #from observation model, kappa=1(DecimationFactor)/samplingrate == *dt
 
-    R= 100*(0.003 + 0.005 + dt*dt + 0.002) * np.array([[1,0,0],[0,1,0],[0,0,1]])# covariance of observation model noise * (gyroNoise + Drift + AccelNoise + Drift + sampling time)
+
+    kappa = dt*dt
+    gyro_drift_noise = 0.001
+    accel_drift_noise = 0.01
+    R= 10000* (0.005 + accel_drift_noise + kappa*(gyro_drift_noise+0.003)) * np.array([[1,0,0],[0,1,0],[0,0,1]])# covariance of observation model noise * (gyroNoise + Drift + AccelNoise + Drift + sampling time)
+    kappa = dt
     S= R + np.dot(H,np.dot(P,H.transpose()))
     S_ti = inv(S.transpose())
     K= np.dot(P,np.dot(H.transpose(),S_ti))
     x= np.dot(K,z.reshape(3,1))  
 
     P_k = P - np.dot(K,np.dot(H,P)) # updated Error Estimate covariance
-#    Q =np.array([[P_k[1,1]+dt*dt*P_k[2,0]+0.004, 0, 0, -dt*(P_k[2,0]+0.001), 0, 0, 0, 0, 0],
-    Q = np.array([[0.0004, 0, 0, -0.0001, 0, 0, 0, 0, 0],
-                    [0, 0.0004, 0, 0, 0.0001, 0, 0, 0, 0],
-                    [0, 0, 0.0004, 0, 0, 0.0001, 0, 0, 0],
-                    [-0.0001, 0, 0, 0.0001, 0, 0, 0, 0, 0],
-                    [0, 0.0001, 0, 0, 0.0001, 0, 0, 0, 0],
-                    [0, 0, 0.0001, 0, 0, 0.0001, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0.0005, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0.0005, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0.0005]])
+    Q = 0.001*np.array([[sum(P_k[0,:])+kappa*kappa*P_k[2,0]+0.003+gyro_drift_noise, 0, 0, -kappa*(P_k[2,0]+gyro_drift_noise), 0, 0, 0, 0, 0],
+                       [0, P_k[0,0]+kappa*kappa*P_k[3,0]+0.003+gyro_drift_noise, 0, 0, P_k[3,0]+gyro_drift_noise, 0, 0, 0, 0],
+                       [0, 0, P_k[1,0]+kappa*kappa*P_k[4,0]+0.003+gyro_drift_noise, 0, 0, P_k[4,0]+gyro_drift_noise, 0, 0, 0],
+                       [-kappa*(P_k[2,0]+gyro_drift_noise), 0, 0, P_k[2,0]+gyro_drift_noise, 0, 0, 0, 0, 0],
+                       [0, P_k[3,0]+gyro_drift_noise, 0, 0, P_k[3,0]+gyro_drift_noise, 0, 0, 0, 0],
+                       [0, 0, P_k[4,0]+gyro_drift_noise, 0, 0, P_k[4,0]+gyro_drift_noise, 0, 0, 0],
+                       [0, 0, 0, 0, 0, 0, nu*nu*P_k[5,0]+accel_drift_noise, 0, 0],
+                       [0, 0, 0, 0, 0, 0, 0, nu*nu*P_k[6,0]+accel_drift_noise, 0],
+                       [0, 0, 0, 0, 0, 0, 0, 0, nu*nu*P_k[7,0]+accel_drift_noise]])
 
-#    Q = np.array([[sum(P_k[0,:])+dt*dt*P_k[2,0]+0.004, 0, 0, -dt*(P_k[2,0]+0.001), 0, 0, 0, 0, 0],
-#                        [0, P_k[0,0]+dt*dt*P_k[3,0]+0.004, 0, 0, P_k[3,0]+0.001, 0, 0, 0, 0],
-#                        [0, 0, P_k[1,0]+dt*dt*P_k[4,0]+0.004, 0, 0, P_k[4,0]+0.001, 0, 0, 0],
-#                        [-dt*(P_k[2,0]+0.001), 0, 0, P_k[2,0]+0.001, 0, 0, 0, 0, 0],
-#                        [0, P_k[3,0]+0.001, 0, 0, P_k[3,0]+0.001, 0, 0, 0, 0],
-#                        [0, 0, P_k[4,0]+0.001, 0, 0, P_k[4,0]+0.001, 0, 0, 0],
-#                        [0, 0, 0, 0, 0, 0, nu*nu*P_k[5,0]+0.005, 0, 0],
-#                        [0, 0, 0, 0, 0, 0, 0, nu*nu*P_k[6,0]+0.005, 0],
-#                        [0, 0, 0, 0, 0, 0, 0, 0, nu*nu*P_k[7,0]+0.005]])
-
+    '''correction'''
     x[0],x[1],x[2]= euler_from_quaternion(quaternion_multiply([qw_u,qx_u,qy_u,qz_u],quaternion_from_euler(x[0],x[1],x[2])))
-    bias[0] = bias[0] - x[3]
-    bias[1] = bias[1] - x[4]
-    bias[2] = bias[2] - x[5]
-    bias[3] = bias[3] - x[6]
-    bias[4] = bias[4] - x[7]
-    bias[5] = bias[5] - x[8]
-#    print("%.2f, %.2f, %.2f \n\n"%(x[0]*r2d, x[1]*r2d, x[2]*r2d))
-#    print("\n\n\n")
-#    sys.exit(0)
-#    print([rates[0]-bias[3], -rates[1]-bias[4], -rates[2]-bias[5]])
-    return x, Q, bias # Q is set to P (predicted P)
+    x[3] = bias[0] - x[3]
+    x[4] = bias[1] - x[4]
+    x[5] = bias[2] - x[5]
+    x[6] = prev_accel[0]*nu - x[6]
+    x[7] = prev_accel[1]*nu - x[7]
+    x[8] = prev_accel[2]*nu - x[8]
+    #print(p-x[3], q-x[4], r-x[5]) # angular velocities in NED
+    return x, Q # Q is set to P (predicted P)
 
 def accelerometer_arctan_estimator(ax,ay,az): # orientation must be checked before used.
 	# roll=atan2(ay,az) #book - roll->pitch order
@@ -386,6 +389,11 @@ def graphupdate(i):
 	# y_roll_LKF.append(ekf._xe[0]*r2d)
 	# roll_line3.set_data(x_time,y_roll_LKF)
 
+
+    y_roll_indirect.popleft()
+    y_roll_indirect.append(ekf.ix[0]*r2d)
+    roll_line3.set_data(x_time,y_roll_indirect)
+
     y_roll_EKF.popleft()
     y_roll_EKF.append(ekf.x[0]*r2d)
     roll_line4.set_data(x_time,y_roll_EKF)
@@ -395,7 +403,7 @@ def graphupdate(i):
 #	roll_line5.set_data(x_time,y_roll_bias)
 
     y_pitch_truth.popleft()
-    y_pitch_truth.append(ekf.pitch*r2d)
+    y_pitch_truth.append(ekf.pitch*r2d) 
     pitch_line1.set_data(x_time,y_pitch_truth)
 
 	# y_pitch_accelero.popleft()
@@ -405,6 +413,10 @@ def graphupdate(i):
 	# y_pitch_LKF.popleft()
 	# y_pitch_LKF.append(ekf._xe[1]*r2d)
 	# pitch_line3.set_data(x_time,y_pitch_LKF)
+
+    y_pitch_indirect.popleft()
+    y_pitch_indirect.append(-ekf.ix[1]*r2d) #since it is in NED
+    pitch_line3.set_data(x_time,y_pitch_indirect)
 
     y_pitch_EKF.popleft()
     y_pitch_EKF.append(ekf.x[1]*r2d)
@@ -427,7 +439,7 @@ def graphupdate(i):
     print("##EKF#### roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf.x[0]*r2d, ekf.x[1]*r2d, ekf.x[2]*r2d))
 #	print("###bias## roll: %.1f, pitch: %.1f, bias: %.1f ,  %.1f "%(ekf.bx[0]*r2d, ekf.bx[2]*r2d, ekf.bx[1]*r2d, ekf.bx[3]*r2d))
 #	print("###bias## roll: %.1f, pitch: %.1f, bias: %.1f ,  %.1f "%(ekf.bax[0]*r2d, ekf.bax[2]*r2d, ekf.bax[1]*r2d, ekf.bax[3]*r2d))
-    print("Indirect# roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf.ix[0]*r2d, ekf.ix[1]*r2d, ekf.ix[2]*r2d))
+    print("Indirect# roll: %.1f, pitch: %.1f, yaw: %.1f "%(ekf.ix[0]*r2d, -ekf.ix[1]*r2d, -ekf.ix[2]*r2d)) #since it is in NED
     print("#####TRUE roll: %.1f, pitch: %.1f, yaw: %.1f \n\n\n"%(ekf.roll*r2d, ekf.pitch*r2d, ekf.yaw*r2d))
 
 if __name__ == '__main__':
@@ -461,12 +473,14 @@ if __name__ == '__main__':
     roll_line1,=roll_fig.plot([],[],color='blue',label='Truth')
     # roll_line2,=roll_fig.plot([],[],color='black',label='Accelero',linewidth=0.7,alpha=0.8)
     # roll_line3,=roll_fig.plot([],[],color='green',label='LKF',linewidth=0.7,alpha=0.8)
+    roll_line3,=roll_fig.plot([],[],color='green',label='Indirect')
     roll_line4,=roll_fig.plot([],[],color='red',label='EKF')
     #	roll_line5,=roll_fig.plot([],[],color='magenta',label='Gyro Bias-LKF')
 
     pitch_line1,=pitch_fig.plot([],[],color='blue',label='Truth')
     # pitch_line2,=pitch_fig.plot([],[],color='black',label='Accelero',linewidth=0.7,alpha=0.8)
     # pitch_line3,=pitch_fig.plot([],[],color='green',label='LKF',linewidth=0.7,alpha=0.8)
+    pitch_line3,=pitch_fig.plot([],[],color='green',label='Indirect')
     pitch_line4,=pitch_fig.plot([],[],color='red',label='EKF')
     #	pitch_line5,=pitch_fig.plot([],[],color='magenta',label='Gyro Bias-LKF')
 
@@ -484,7 +498,7 @@ if __name__ == '__main__':
     x_time=deque(np.linspace(3,0,num=width))
     y_roll_truth=deque([0]*width)
     y_pitch_truth=deque([0]*width)
-    y_yaw_truth=deque([0]*width)
+#    y_yaw_truth=deque([0]*width)
 
     #	y_roll_accelero=deque([0]*width)
     #	y_pitch_accelero=deque([0]*width)
@@ -494,9 +508,12 @@ if __name__ == '__main__':
     #	y_pitch_LKF=deque([0]*width)
     #	y_yaw_LKF=deque([0]*width)
 
+    y_roll_indirect=deque([0]*width)
+    y_pitch_indirect=deque([0]*width)
+
     y_roll_EKF=deque([0]*width)
     y_pitch_EKF=deque([0]*width)
-    y_yaw_EKF=deque([0]*width)
+#    y_yaw_EKF=deque([0]*width)
 
     #	y_roll_bias=deque([0]*width)
     #	y_pitch_bias=deque([0]*width)
